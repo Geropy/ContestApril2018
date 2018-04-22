@@ -6,12 +6,40 @@
 #include <memory>
 #include <math.h>
 #include <array>
+#include <queue>
 
 using namespace std;
+
+struct AstarPos
+{
+	array<int, 2> pos;
+	int fScore;
+};
+
+bool operator<(const AstarPos& lhs, const AstarPos& rhs)
+{
+	return lhs.fScore < rhs.fScore;
+}
 
 float dist(int x1, int y1, int x2, int y2)
 {
 	return sqrt((float)((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2)));
+}
+
+float magOfVector(array<int, 2> & vect)
+{
+	return sqrt((float)(vect[0] * vect[0] + vect[1] * vect[1]));
+}
+
+array<int, 2> rotateDegrees(array<int, 2> initialVect, int degrees)
+{
+	array<int, 2> answer;
+	float radians = degrees * 0.0174533f;
+
+	answer[0] = initialVect[0] * cosf(radians) - initialVect[1] * sinf(radians);
+	answer[1] = initialVect[0] * sinf(radians) + initialVect[1] * cosf(radians);
+
+	return answer;
 }
 
 enum StructureType { NONE = -1, MINE = 0, TOWER = 1, BARRACKS = 2 };
@@ -79,6 +107,7 @@ public:
 
 };
 
+class Board;
 
 class Unit
 {
@@ -88,33 +117,6 @@ public:
 	Player* owner;
 	UnitType type;
 	int health;
-
-};
-
-class Board
-{
-public:
-	map<int, Site> sites;
-
-	const Site* closestUnusedSite(Unit& queen, bool minable = false) const
-	{
-		float minDist = 99999.0f;
-		const Site* answer = nullptr;
-
-		for (auto& siteIter : sites)
-		{
-			const Site& site = siteIter.second;
-			if (site.structure != nullptr || (minable && site.goldRemaining == 0)) { continue; }
-			float tempDist = dist(queen.col, queen.row, site.col, site.row);
-			if (tempDist < minDist)
-			{
-				minDist = tempDist;
-				answer = &site;
-			}
-		}
-
-		return answer;
-	}
 
 };
 
@@ -170,12 +172,112 @@ public:
 
 };
 
+class Board
+{
+public:
+	map<int, Site> sites;
+	Player& hero, enemy;
+
+	Board(Player& hero, Player& enemy)
+		: hero(hero)
+		, enemy(enemy)
+	{}
+
+	const Site* closestUnusedSite(Unit& queen, bool minable = false) const
+	{
+		float minDist = 99999.0f;
+		const Site* answer = nullptr;
+
+		for (auto& siteIter : sites)
+		{
+			const Site& site = siteIter.second;
+			if (site.structure != nullptr || (minable && site.goldRemaining == 0)) { continue; }
+			float tempDist = dist(queen.col, queen.row, site.col, site.row);
+			if (tempDist < minDist)
+			{
+				minDist = tempDist;
+				answer = &site;
+			}
+		}
+
+		return answer;
+	}
+
+	array<int, 2> moveQueenToward(int targetRow, int targetCol, bool isHero)
+	{
+		// Use A* to find the best path to take
+		Unit* queen;
+		if (isHero) { queen = &hero.queen; }
+		else { queen = &enemy.queen; }
+
+		priority_queue<AstarPos> openSet;
+		AstarPos queenPos;
+		queenPos.pos = { {queen->row, queen->col} };
+		queenPos.fScore = (int)(ceil(dist(queenPos.pos[0], queenPos.pos[1], targetRow, targetCol) / 60.0f));
+		openSet.push(queenPos);
+
+		array<int, 2> best = queenPos.pos;
+
+		while (!openSet.empty())
+		{
+			const AstarPos& current = openSet.top();
+			if (current.pos[0] == targetRow && current.pos[1] == targetCol) { return best; }
+
+			openSet.pop();
+
+			// Need to cycle through each possible continuation
+			// These will be defined according to angles towards destination
+			// For now, try 27, 54, 81 degrees to both sides, as well as 0
+			// Account for site collisions to determine where I'd end up
+			array<array<int, 2>, 7> neighbors;
+
+			// First 0 degrees
+			array<int, 2> vectTowardsTarget = { {targetRow - current.pos[0], targetCol - current.pos[1]} };
+			float distToTarget = magOfVector(vectTowardsTarget);
+			vectTowardsTarget[0] *= 60.0f / distToTarget;
+			vectTowardsTarget[1] *= 60.0f / distToTarget;
+			float insideDist = distInsideSite(current.pos[0] + vectTowardsTarget[0], current.pos[1] + vectTowardsTarget[1]);
+			vectTowardsTarget[0] *= (60.0f - insideDist) / 60.0f;
+			vectTowardsTarget[1] *= (60.0f - insideDist) / 60.0f;
+			neighbors[0][0] = current.pos[0] + vectTowardsTarget[0];
+			neighbors[0][1] = current.pos[1] + vectTowardsTarget[1];
+
+			//Then rotate and try again
+			vectTowardsTarget = rotateDegrees(vectTowardsTarget, 27);
+			// Continue from here
+		}
+
+
+	}
+
+	float distInsideSite(int row, int col)
+	{		
+		//Queen radius is 30
+		
+		for (auto& siteIter : sites)
+		{
+			Site& site = siteIter.second;
+			float insideDist = site.radius + 30 - dist(row, col, site.row, site.col);
+			if (insideDist > 0)
+			{
+				return insideDist;
+			}
+		}
+
+		return 0.0f;
+	}
+
+};
+
+
+
+
 
 
 int main()
 {
-	Board board;
 	Player hero, enemy;
+	Board board = Board(hero, enemy);
 	enemy.gold = -1;
 	int numSites;
 	cin >> numSites; cin.ignore();
@@ -325,7 +427,7 @@ int main()
 		int myBarracksOwned = hero.ownedBarracks.size();
 		const Site* closesetUnusedSite = board.closestUnusedSite(hero.queen);
 
-		if (myBarracksOwned < 2)
+		if (myBarracksOwned < 1)
 		{
 			if (closesetUnusedSite != nullptr)
 			{
@@ -379,7 +481,7 @@ int main()
 			{
 				cout << " " << barracks.site->ID;
 				hero.gold -= barracks.trainCost;
-				buildKnights = !buildKnights;
+				//buildKnights = !buildKnights;
 			}
 		}
 		cout << endl;
